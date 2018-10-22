@@ -1,39 +1,36 @@
 ﻿#include "pch.h"
 
-const double GRAVITY = 1;
+const double GRAVITY = 1.5;
 const double FLOOR_HEIGHT = 10;
 const int NUM_X_BLOCKS = 8;
 
 class Block;
-std::vector<Block> blocks;
+std::vector<std::unique_ptr<Block>> blocks;
 
 class Block {
 public:
     Block(double x) : rect(x, -50, 50, 50) {}
 
     void update() {
-        if (!collided) {
-            if (willCollide()) {
-                speed = 0;
-                collided = true;
-            }
+        speed = FALLING_SPEED;
+        if (willCollide()) {
+            speed = 0.0;
+        } else {
             rect.y += speed;
         }
     }
 
-    void draw() const {
-        rect.draw(Palette::Blue);
-    }
+    void draw() const { rect.draw(Palette::Blue); }
 
-    bool intersects(RectF other) const {
-        return other.intersects(rect);
-    }
+    bool intersects(RectF other) const { return other.intersects(rect); }
 
     RectF rect;
-    double speed = 3;
     bool destroyed = false;
+
+    double speed = 3.0;
+
 private:
-    bool collided = false;
+    const double FALLING_SPEED = 3.0;
 
     bool willCollide() const {
         if (rect.y + rect.h + speed > Window::Height() - FLOOR_HEIGHT) {
@@ -42,8 +39,8 @@ private:
 
         auto nextRect = rect;
         nextRect.y += speed;
-        for (const auto& block : blocks) {
-            if (this != &block && nextRect.intersects(block.rect)) {
+        for (const auto &block : blocks) {
+            if (this != block.get() && nextRect.intersects(block->rect)) {
                 return true;
             }
         }
@@ -53,10 +50,9 @@ private:
 
 class Bullet {
 public:
-    Bullet(Vec2 pos, bool right) :
-        rect(pos - Vec2(25.0, 50.0), 50.0, 50.0),
-        velocity(right ? SPEED : -SPEED, -SPEED),
-        active(true) {}
+    Bullet(Vec2 pos, bool right)
+        : rect(pos - Vec2(25.0, 50.0), 50.0, 50.0),
+        velocity(right ? SPEED : -SPEED, -SPEED), active(true) {}
 
     void update() {
         if (!active) {
@@ -68,9 +64,9 @@ public:
             return;
         }
 
-        for (auto& block : blocks) {
-            if (block.intersects(rect)) {
-                block.destroyed = true;
+        for (auto &block : blocks) {
+            if (block->intersects(rect)) {
+                block->destroyed = true;
                 active = false;
                 return;
             }
@@ -96,12 +92,11 @@ private:
 
 class Player {
 public:
-    Player() : rect(50, 50, 50, 100), bulletFireTimer(1.0, false) {
-
-    }
+    Player() : rect(50, 50, 50, 100), bulletFireTimer(1.0, false) {}
 
     void update() {
-        if (KeyZ.down() && (!bullet || (!bullet->active && bulletFireTimer.reachedZero()))) {
+        if (KeyZ.down() &&
+            (!bullet || (!bullet->active && bulletFireTimer.reachedZero()))) {
             bullet = std::make_unique<Bullet>(rect.topCenter(), facingRight);
             bulletFireTimer.restart();
         }
@@ -125,8 +120,8 @@ public:
         {
             auto nextRect = rect;
             nextRect.x += vx;
-            for (const auto& block : blocks) {
-                if (!block.intersects(rect) && block.intersects(nextRect)) {
+            for (const auto &block : blocks) {
+                if (!block->intersects(rect) && block->intersects(nextRect)) {
                     vx = 0.0;
                     break;
                 }
@@ -144,13 +139,13 @@ public:
         {
             auto nextRect = rect;
             nextRect.y += vy;
-            for (const auto& block : blocks) {
-                if (block.intersects(nextRect)) {
-                    if (block.speed > 0.0) {
+            for (const auto &block : blocks) {
+                if (block->intersects(nextRect)) {
+                    if (block->speed > 0.0) {
                         if (vy > 0.0) {
                             grounded = touching = true;
                         }
-                        vy = block.speed;
+                        vy = block->speed;
                     } else {
                         grounded = touching = true;
                         vy = 0.0;
@@ -167,9 +162,9 @@ public:
 
         rect.y += vy;
 
-        for (const auto& block : blocks) {
-            if (block.intersects(rect)) {
-                assert(false);
+        for (const auto &block : blocks) {
+            if (block->intersects(rect)) {
+                System::Exit();
             }
         }
     }
@@ -196,23 +191,41 @@ void Main() {
     Graphics::SetTargetFrameRateHz(60);
     Graphics::SetBackground(ColorF(0.8, 0.9, 1.0));
 
+    Font font(30);
+    int score = 0;
+    int highScore = 0;
+
     Player player;
     Stopwatch sw;
     sw.start();
     while (System::Update()) {
         if (sw.ms() > 1000) {
-            blocks.emplace_back(Random(0, NUM_X_BLOCKS - 1) * Window::Width() / static_cast<double>(NUM_X_BLOCKS));
+            blocks.emplace_back(std::make_unique<Block>(
+                Random(0, NUM_X_BLOCKS - 1) * Window::Width() /
+                static_cast<double>(NUM_X_BLOCKS)));
             sw.restart();
         }
-        for (auto& block : blocks) {
-            block.update();
+        for (auto &block : blocks) {
+            block->update();
+            if (block->speed == 0.0 && block->rect.y <= 0.0) {
+                System::Exit();
+            }
         }
-        blocks.erase(std::remove_if(blocks.begin(), blocks.end(), [](const Block& block) { return block.destroyed; }), blocks.end());
+        const int nBefore = blocks.size();
+        blocks.erase(
+            std::remove_if(blocks.begin(), blocks.end(),
+                [](const auto &block) { return block->destroyed; }),
+            blocks.end());
         player.update();
 
-        for (auto& block : blocks) {
-            block.draw();
+        score += 10 * std::max(0, static_cast<int>(nBefore - blocks.size()));
+        highScore = std::max(score, highScore);
+
+        for (auto &block : blocks) {
+            block->draw();
         }
         player.draw();
+        font(U"SCORE: ", score, U" HIGHSCORE: ", highScore)
+            .draw(Vec2(0, 0), Palette::Black);
     }
 }
