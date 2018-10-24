@@ -1,46 +1,85 @@
 ﻿#include "pch.h"
 
-const double GRAVITY = 1.5;
-const double FLOOR_HEIGHT = 10;
-const int NUM_X_BLOCKS = 8;
+constexpr double gravity = 1.5;
+constexpr double floorHeight = 10;
+constexpr int numBlocksX = 8;
 
-class Block;
-std::vector<std::unique_ptr<Block>> blocks;
+enum class Scene {
+    Title,
+    Playing,
+    GameOver
+};
+
+struct Data {
+    Font font = Font(30);
+    int score = 0;
+    int highScore = 0;
+};
+
+using App = SceneManager<Scene, Data>;
 
 class Block {
 public:
-    Block(double x) : rect(x, -50, 50, 50) {}
+    static const double fallingSpeed;
+    static const double size;
 
-    void update() {
-        speed = FALLING_SPEED;
-        if (willCollide()) {
+    Block(double x) : rect(x, -size, size, size) {}
+
+    void update(const std::vector<Block>& blocks) {
+        speed = fallingSpeed;
+        if (willCollide(blocks)) {
+            if (rect.y <= 0.0) {
+                touchingTop = true;
+            }
+
+            moving = false;
             speed = 0.0;
         } else {
+            moving = true;
             rect.y += speed;
         }
     }
 
-    void draw() const { rect.draw(Palette::Blue); }
+    void draw() const {
+        rect.draw(Palette::Blue);
+    }
 
-    bool intersects(RectF other) const { return other.intersects(rect); }
+    bool intersects(RectF other) const {
+        return other.intersects(rect);
+    }
 
-    RectF rect;
-    bool destroyed = false;
+    void destroy() {
+        destroyed = true;
+    }
 
-    double speed = 3.0;
+    bool isDestroyed() const {
+        return destroyed;
+    }
+
+    bool isMoving() const {
+        return moving;
+    }
+
+    bool isTouchingTop() const {
+        return touchingTop;
+    }
 
 private:
-    const double FALLING_SPEED = 3.0;
+    RectF rect;
+    bool destroyed = false;
+    bool moving = true;
+    bool touchingTop = false;
+    double speed = 3.0;
 
-    bool willCollide() const {
-        if (rect.y + rect.h + speed > Window::Height() - FLOOR_HEIGHT) {
+    bool willCollide(const std::vector<Block>& blocks) const {
+        if (rect.y + rect.h + speed > Window::Height() - floorHeight) {
             return true;
         }
 
         auto nextRect = rect;
         nextRect.y += speed;
-        for (const auto &block : blocks) {
-            if (this != block.get() && nextRect.intersects(block->rect)) {
+        for (const auto& block : blocks) {
+            if (this != &block && nextRect.intersects(block.rect)) {
                 return true;
             }
         }
@@ -48,13 +87,16 @@ private:
     }
 };
 
+const double Block::fallingSpeed = 3.0;
+const double Block::size = 50.0;
+
 class Bullet {
 public:
-    Bullet(Vec2 pos, bool right)
-        : rect(pos - Vec2(25.0, 50.0), 50.0, 50.0),
-        velocity(right ? SPEED : -SPEED, -SPEED), active(true) {}
+    Bullet(Vec2 pos, bool right) :
+        rect(pos - Vec2(size / 2, size), size, size),
+        velocity(right ? speed : -speed, -speed), active(true) {}
 
-    void update() {
+    void update(std::vector<Block>& blocks) {
         if (!active) {
             return;
         }
@@ -64,15 +106,15 @@ public:
             return;
         }
 
-        for (auto &block : blocks) {
-            if (block->intersects(rect)) {
-                block->destroyed = true;
+        for (auto& block : blocks) {
+            if (block.intersects(rect)) {
+                block.destroy();
                 active = false;
                 return;
             }
         }
 
-        velocity.y += GRAVITY;
+        velocity.y += gravity;
         rect.pos += velocity;
     }
 
@@ -85,43 +127,43 @@ public:
     bool active;
 
 private:
-    const double SPEED = 20.0;
+    static const double speed;
+    static const double size;
     RectF rect;
     Vec2 velocity;
 };
 
+const double Bullet::speed = 20.0;
+const double Bullet::size = 50.0;
+
 class Player {
 public:
-    Player() : rect(50, 50, 50, 100), bulletFireTimer(1.0, false) {}
+    Player() :
+        rect(50, 50, 50, 100),
+        bulletFireTimer(1.0, false) {}
 
-    void update() {
+    void update(std::vector<Block>& blocks) {
         if (KeyZ.down() &&
             (!bullet || (!bullet->active && bulletFireTimer.reachedZero()))) {
-            bullet = std::make_unique<Bullet>(rect.topCenter(), facingRight);
+            bullet = Bullet(rect.topCenter(), facingRight);
             bulletFireTimer.restart();
         }
         if (bullet) {
-            bullet->update();
+            bullet->update(blocks);
         }
 
         const bool left = KeyLeft.pressed() && rect.x > 0.0;
         const bool right = KeyRight.pressed() && rect.x + rect.w < Window::Width();
         double vx = 0.0;
         if (left ^ right) {
-            if (left) {
-                vx = -SPEED;
-                facingRight = false;
-            }
-            if (right) {
-                vx = SPEED;
-                facingRight = true;
-            }
+            vx = left ? -speed : speed;
+            facingRight = right;
         }
         {
             auto nextRect = rect;
             nextRect.x += vx;
-            for (const auto &block : blocks) {
-                if (!block->intersects(rect) && block->intersects(nextRect)) {
+            for (const auto& block : blocks) {
+                if (block.intersects(nextRect)) {
                     vx = 0.0;
                     break;
                 }
@@ -130,22 +172,22 @@ public:
         rect.x += vx;
 
         if (grounded && KeyUp.down()) {
-            vy = -20;
+            vy = -20.0;
             grounded = false;
         }
 
-        vy += GRAVITY;
+        vy += gravity;
         bool touching = false;
         {
             auto nextRect = rect;
             nextRect.y += vy;
-            for (const auto &block : blocks) {
-                if (block->intersects(nextRect)) {
-                    if (block->speed > 0.0) {
+            for (const auto& block : blocks) {
+                if (block.intersects(nextRect)) {
+                    if (block.isMoving()) {
                         if (vy > 0.0) {
                             grounded = touching = true;
                         }
-                        vy = block->speed;
+                        vy = Block::fallingSpeed;
                     } else {
                         grounded = touching = true;
                         vy = 0.0;
@@ -155,77 +197,132 @@ public:
             }
         }
 
-        if (!touching && rect.y + rect.h + vy > Window::Height() - FLOOR_HEIGHT) {
+        if (!touching && rect.y + rect.h + vy > Window::Height() - floorHeight) {
             grounded = true;
             vy = 0.0;
         }
 
         rect.y += vy;
 
-        for (const auto &block : blocks) {
-            if (block->intersects(rect)) {
-                System::Exit();
+        for (const auto& block : blocks) {
+            if (block.intersects(rect)) {
+                dead = true;
+                break;
             }
         }
     }
 
-    void draw() {
+    void draw() const {
         if (bullet) {
             bullet->draw();
         }
         rect.draw(Palette::Red);
     }
 
+    bool isDead() const {
+        return dead;
+    }
+
 private:
-    const double SPEED = 10;
+    static const double speed;
     double vy = 0.0;
     RectF rect;
     bool grounded = false;
     bool facingRight = true;
-    std::unique_ptr<Bullet> bullet;
+    bool dead = false;
+    Optional<Bullet> bullet;
     Timer bulletFireTimer;
 };
 
-void Main() {
-    Window::Resize({ 50 * NUM_X_BLOCKS, 600 });
-    Graphics::SetTargetFrameRateHz(60);
-    Graphics::SetBackground(ColorF(0.8, 0.9, 1.0));
+const double Player::speed = 10;
 
-    Font font(30);
-    int score = 0;
-    int highScore = 0;
+class Title : public App::Scene {
+public:
+    Title(const InitData& init) : IScene(init) {}
+};
 
-    Player player;
-    Stopwatch sw;
-    sw.start();
-    while (System::Update()) {
-        if (sw.ms() > 1000) {
-            blocks.emplace_back(std::make_unique<Block>(
-                Random(0, NUM_X_BLOCKS - 1) * Window::Width() /
-                static_cast<double>(NUM_X_BLOCKS)));
-            sw.restart();
+class Playing : public App::Scene {
+public:
+    Playing(const InitData& init) : IScene(init) {
+        blockFallSW.start();
+    }
+
+    void update() override {
+        constexpr int blockFallIntervalms = 1000;
+        if (blockFallSW.ms() > blockFallIntervalms) {
+            blocks.emplace_back(
+                Random(0, numBlocksX - 1) * Window::Width() /
+                static_cast<double>(numBlocksX));
+            blockFallSW.restart();
         }
-        for (auto &block : blocks) {
-            block->update();
-            if (block->speed == 0.0 && block->rect.y <= 0.0) {
-                System::Exit();
+        for (auto& block : blocks) {
+            block.update(blocks);
+            if (block.isTouchingTop()) {
+                changeScene(Scene::GameOver, 0, false);
             }
         }
-        const int nBefore = blocks.size();
+        const auto numBlocks = blocks.size();
         blocks.erase(
             std::remove_if(blocks.begin(), blocks.end(),
-                [](const auto &block) { return block->destroyed; }),
+                [](const auto& block) { return block.isDestroyed(); }),
             blocks.end());
-        player.update();
+        getData().score += 10 * std::max(0, static_cast<int>(numBlocks - blocks.size()));
+        getData().highScore = std::max(getData().score, getData().highScore);
 
-        score += 10 * std::max(0, static_cast<int>(nBefore - blocks.size()));
-        highScore = std::max(score, highScore);
+        player.update(blocks);
+        if (player.isDead()) {
+            changeScene(Scene::GameOver, 0, false);
+        }
+    }
 
-        for (auto &block : blocks) {
-            block->draw();
+    void draw() const override {
+        for (auto& block : blocks) {
+            block.draw();
         }
         player.draw();
-        font(U"SCORE: ", score, U" HIGHSCORE: ", highScore)
+        getData().font(U"SCORE: ", getData().score, U" HIGHSCORE: ", getData().highScore)
             .draw(Vec2(0, 0), Palette::Black);
+    }
+
+private:
+    Player player;
+    std::vector<Block> blocks;
+    Stopwatch blockFallSW;
+};
+
+class GameOver : public App::Scene {
+public:
+    GameOver(const InitData& init) : IScene(init) {}
+};
+
+void Main() {
+    Window::SetTitle(U"Tapioca");
+    Window::Resize({static_cast<int>(Block::size * numBlocksX), 600});
+    Graphics::SetTargetFrameRateHz(60);
+    Graphics::SetBackground(Color(212, 255, 252));
+
+    TextureAsset::Register(U"block", U"block.png");
+    TextureAsset::Register(U"boom1", U"boom1.png");
+    TextureAsset::Register(U"boom2", U"boom2.png");
+    TextureAsset::Register(U"stop1", U"stop1.png");
+    TextureAsset::Register(U"stop2", U"stop2.png");
+    TextureAsset::Register(U"sun1", U"sun1.png");
+    TextureAsset::Register(U"sun2", U"sun2.png");
+    TextureAsset::Register(U"tamago", U"tamago.png");
+    TextureAsset::Register(U"throw1", U"throw1.png");
+    TextureAsset::Register(U"throw2", U"throw2.png");
+    TextureAsset::Register(U"throw3", U"throw3.png");
+
+    App mgr;
+    mgr.add<Title>(Scene::Title)
+        .add<Playing>(Scene::Playing)
+        .add<GameOver>(Scene::GameOver);
+    mgr.init(Scene::Title);
+    mgr.changeScene(Scene::Playing, 0, false);
+
+    while (System::Update()) {
+        if (!mgr.update()) {
+            break;
+        }
     }
 }
