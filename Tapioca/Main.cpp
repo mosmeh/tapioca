@@ -139,7 +139,7 @@ const double Bullet::size = 50.0;
 class Player {
 public:
     Player() :
-        rect(50, 50, 50, 100),
+        rect(50, Window::Height() - floorHeight - 100, 50, 100),
         bulletFireTimer(1.0, false) {}
 
     void update(std::vector<Block>& blocks) {
@@ -152,48 +152,47 @@ public:
             bullet->update(blocks);
         }
 
-        const bool left = KeyLeft.pressed() && rect.x > 0.0;
-        const bool right = KeyRight.pressed() && rect.x + rect.w < Window::Width();
-        double vx = 0.0;
-        if (left ^ right) {
-            vx = left ? -speed : speed;
-            facingRight = right;
-        }
-        {
-            auto nextRect = rect;
-            nextRect.x += vx;
-            for (const auto& block : blocks) {
-                if (block.intersects(nextRect)) {
-                    vx = 0.0;
-                    break;
+        if (KeyLeft.pressed() ^ KeyRight.pressed()) {
+            facingRight = KeyRight.pressed();
+
+            const bool left = KeyLeft.pressed() && rect.x > 0.0;
+            const bool right = KeyRight.pressed() && rect.x + rect.w < Window::Width();
+            if (left ^ right) {
+                double vx = left ? -speed : speed;
+                auto nextRect = rect;
+                nextRect.x += vx;
+                for (const auto& block : blocks) {
+                    if (block.intersects(nextRect)) {
+                        vx = 0.0;
+                        break;
+                    }
                 }
+                rect.x += vx;
             }
         }
-        rect.x += vx;
 
         if (grounded && KeyUp.down()) {
-            vy = -20.0;
+            constexpr double jumpSpeed = 20.0;
+            vy = -jumpSpeed;
             grounded = false;
         }
 
         vy += gravity;
         bool touching = false;
-        {
-            auto nextRect = rect;
-            nextRect.y += vy;
-            for (const auto& block : blocks) {
-                if (block.intersects(nextRect)) {
-                    if (block.isMoving()) {
-                        if (vy > 0.0) {
-                            grounded = touching = true;
-                        }
-                        vy = Block::fallingSpeed;
-                    } else {
+        auto nextRect = rect;
+        nextRect.y += vy;
+        for (const auto& block : blocks) {
+            if (block.intersects(nextRect)) {
+                if (block.isMoving()) {
+                    if (vy > 0.0) {
                         grounded = touching = true;
-                        vy = 0.0;
                     }
-                    break;
+                    vy = Block::fallingSpeed;
+                } else {
+                    grounded = touching = true;
+                    vy = 0.0;
                 }
+                break;
             }
         }
 
