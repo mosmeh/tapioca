@@ -1,7 +1,7 @@
 ﻿#include "pch.h"
 
 constexpr double gravity = 1.5;
-constexpr double floorHeight = 10;
+constexpr double floorHeight = 80;
 constexpr int numBlocksX = 8;
 
 enum class Scene {
@@ -17,6 +17,84 @@ struct Data {
 };
 
 using App = SceneManager<Scene, Data>;
+
+class Animation {
+public:
+    Animation(std::vector<FilePath> textures, double intervals, bool looped = true, bool immediatelyStarted = true) :
+        looped(looped),
+        timer(intervals) {
+        for (const auto& path : textures) {
+            texAssets.emplace_back(path);
+        }
+        if (immediatelyStarted) {
+            start();
+        }
+    }
+
+    void start() {
+        timer.restart();
+        started = true;
+    }
+
+    void stop() {
+        timer.pause();
+        started = false;
+    }
+
+    void update() {
+        if (timer.reachedZero()) {
+            if (looped) {
+                idx = (idx + 1) % texAssets.size();
+                timer.restart();
+            } else if (idx < texAssets.size() - 1) {
+                ++idx;
+                timer.restart();
+            } else {
+                started = false;
+            }
+        }
+    }
+
+    const TextureAsset& get() const {
+        return texAssets.at(idx);
+    }
+
+    bool isFinished() const {
+        return !looped && idx == texAssets.size() - 1 && timer.reachedZero();
+    }
+
+    bool isStarted() const {
+        return started;
+    }
+
+private:
+    bool looped;
+    std::vector<TextureAsset> texAssets;
+    Timer timer;
+    int idx = 0;
+    bool started = false;
+};
+
+class Stage {
+public:
+    Stage() :
+        floorRect(0, Window::Height() - floorHeight, Window::Width(), floorHeight),
+        sunRect(0, 0, 170, 170),
+        sunAnim({ U"sun1", U"sun2" }, 0.5) {}
+
+    void update() {
+        sunAnim.update();
+    }
+
+    void draw() const {
+        floorRect.draw(Color(123, 58, 21));
+        sunRect(sunAnim.get()).draw();
+    }
+
+private:
+    RectF floorRect, sunRect;
+    Animation sunAnim;
+};
 
 class Block {
 public:
@@ -41,7 +119,7 @@ public:
     }
 
     void draw() const {
-        rect.draw(Palette::Blue);
+        rect(TextureAsset(U"block")).draw();
     }
 
     bool intersects(RectF other) const {
@@ -90,26 +168,33 @@ private:
 const double Block::fallingSpeed = 3.0;
 const double Block::size = 50.0;
 
-class Bullet {
+class Egg {
 public:
-    Bullet(Vec2 pos, bool right) :
-        rect(pos - Vec2(size / 2, size), size, size),
-        velocity(right ? speed : -speed, -speed), active(true) {}
+    Egg(Vec2 pos, bool right) :
+        rect(pos - Vec2(size, size) / 2.0, size, size),
+        velocity(right ? speed : -speed, -speed),
+        explosionAnim({ U"boom1", U"boom2" }, 0.1, false, false) {}
 
     void update(std::vector<Block>& blocks) {
-        if (!active) {
+        explosionAnim.update();
+
+        if (explosionAnim.isFinished()) {
+            exploded = true;
+            return;
+        }
+        if (explosionAnim.isStarted()) {
             return;
         }
 
         if (rect.x + rect.w <= 0.0 || rect.x > Window::Width()) {
-            active = false;
+            explosionAnim.start();
             return;
         }
 
         for (auto& block : blocks) {
             if (block.intersects(rect)) {
                 block.destroy();
-                active = false;
+                explosionAnim.start();
                 return;
             }
         }
@@ -119,37 +204,47 @@ public:
     }
 
     void draw() const {
-        if (active) {
-            rect.draw(Palette::Green);
-        }
+        const auto& tex = explosionAnim.isStarted() ? explosionAnim.get() : TextureAsset(U"tamago");
+        rect(tex).draw();
     }
 
-    bool active;
+    bool hit() const {
+        return exploded;
+    }
 
 private:
     static const double speed;
     static const double size;
     RectF rect;
     Vec2 velocity;
+    bool exploded = false;
+    Animation explosionAnim;
 };
 
-const double Bullet::speed = 20.0;
-const double Bullet::size = 50.0;
+const double Egg::speed = 20.0;
+const double Egg::size = 50.0;
 
 class Player {
 public:
     Player() :
-        rect(50, Window::Height() - floorHeight - 100, 50, 100),
-        bulletFireTimer(1.0, false) {}
+        rect(50, Window::Height() - floorHeight - 100, 100, 100),
+        eggLaunchTimer(1.0, false),
+        restingAnim({ U"stop1", U"stop2" }, 0.3),
+        throwingAnim({ U"throw1" }, 0.2, false, false) {
+        eggLaunchTimer.set(0s);
+    }
 
     void update(std::vector<Block>& blocks) {
-        if (KeyZ.down() &&
-            (!bullet || (!bullet->active && bulletFireTimer.reachedZero()))) {
-            bullet = Bullet(rect.topCenter(), facingRight);
-            bulletFireTimer.restart();
+        if (KeyZ.down() && eggLaunchTimer.reachedZero()) {
+            throwingAnim.start();
+            egg = Egg(rect.topCenter(), facingRight);
+            eggLaunchTimer.restart();
         }
-        if (bullet) {
-            bullet->update(blocks);
+        if (egg) {
+            egg->update(blocks);
+            if (egg->hit()) {
+                egg = none;
+            }
         }
 
         if (KeyLeft.pressed() ^ KeyRight.pressed()) {
@@ -209,13 +304,17 @@ public:
                 break;
             }
         }
+
+        restingAnim.update();
+        throwingAnim.update();
     }
 
     void draw() const {
-        if (bullet) {
-            bullet->draw();
+        if (egg) {
+            egg->draw();
         }
-        rect.draw(Palette::Red);
+        const auto& tex = (!throwingAnim.isStarted() || throwingAnim.isFinished()) ? restingAnim.get() : throwingAnim.get();
+        rect(tex.mirrored(facingRight)).draw();
     }
 
     bool isDead() const {
@@ -229,8 +328,9 @@ private:
     bool grounded = false;
     bool facingRight = true;
     bool dead = false;
-    Optional<Bullet> bullet;
-    Timer bulletFireTimer;
+    Optional<Egg> egg;
+    Timer eggLaunchTimer;
+    Animation restingAnim, throwingAnim;
 };
 
 const double Player::speed = 10;
@@ -247,6 +347,8 @@ public:
     }
 
     void update() override {
+        stage.update();
+
         constexpr int blockFallIntervalms = 1000;
         if (blockFallSW.ms() > blockFallIntervalms) {
             blocks.emplace_back(
@@ -275,6 +377,7 @@ public:
     }
 
     void draw() const override {
+        stage.draw();
         for (auto& block : blocks) {
             block.draw();
         }
@@ -284,6 +387,7 @@ public:
     }
 
 private:
+    Stage stage;
     Player player;
     std::vector<Block> blocks;
     Stopwatch blockFallSW;
@@ -296,21 +400,19 @@ public:
 
 void Main() {
     Window::SetTitle(U"Tapioca");
-    Window::Resize({static_cast<int>(Block::size * numBlocksX), 600});
+    Window::Resize({ static_cast<int>(Block::size * numBlocksX), 600 });
     Graphics::SetTargetFrameRateHz(60);
     Graphics::SetBackground(Color(212, 255, 252));
 
-    TextureAsset::Register(U"block", U"block.png");
-    TextureAsset::Register(U"boom1", U"boom1.png");
-    TextureAsset::Register(U"boom2", U"boom2.png");
-    TextureAsset::Register(U"stop1", U"stop1.png");
-    TextureAsset::Register(U"stop2", U"stop2.png");
-    TextureAsset::Register(U"sun1", U"sun1.png");
-    TextureAsset::Register(U"sun2", U"sun2.png");
-    TextureAsset::Register(U"tamago", U"tamago.png");
-    TextureAsset::Register(U"throw1", U"throw1.png");
-    TextureAsset::Register(U"throw2", U"throw2.png");
-    TextureAsset::Register(U"throw3", U"throw3.png");
+    TextureAsset::Register(U"block", U"imgs/block.png");
+    TextureAsset::Register(U"boom1", U"imgs/boom1.png");
+    TextureAsset::Register(U"boom2", U"imgs/boom2.png");
+    TextureAsset::Register(U"stop1", U"imgs/stop1.png");
+    TextureAsset::Register(U"stop2", U"imgs/stop2.png");
+    TextureAsset::Register(U"sun1", U"imgs/sun1.png");
+    TextureAsset::Register(U"sun2", U"imgs/sun2.png");
+    TextureAsset::Register(U"tamago", U"imgs/tamago.png");
+    TextureAsset::Register(U"throw1", U"imgs/throw1.png");
 
     App mgr;
     mgr.add<Title>(Scene::Title)
