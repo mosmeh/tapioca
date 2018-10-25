@@ -164,7 +164,7 @@ const double Block::size = 50.0;
 class Egg {
 public:
     Egg(Vec2 pos, bool right) :
-        rect(pos - Vec2(size, size) / 2.0, size, size),
+        rect(pos - Vec2(size / 2.0, size / 4.0), size, size),
         velocity(right ? speed : -speed, -speed),
         explosionAnim({ U"boom1", U"boom2" }, 0.1, false, false) {}
 
@@ -291,10 +291,12 @@ public:
 
         rect.y += vy;
 
-        for (const auto& block : blocks) {
-            if (block.intersects(rect)) {
-                dead = true;
-                break;
+        if (grounded) {
+            for (const auto& block : blocks) {
+                if (block.isMoving() && block.intersects(rect)) {
+                    dead = true;
+                    break;
+                }
             }
         }
 
@@ -334,7 +336,7 @@ const Size Player::size = Size(40, 70);
 const double Player::speed = 8;
 
 struct Data {
-    Font font = Font(28);
+    Font font = Font(28, U"PixelMplus10-Regular.ttf");
     int score = 0;
     int highScore = 0;
     Stage stage;
@@ -343,6 +345,11 @@ struct Data {
 };
 
 using App = SceneManager<Scene, Data>;
+
+void drawScore(const Data& data) {
+    data.font(U"SCORE ", Pad(data.score, { 5, U'0' })).draw(Vec2::Zero(), Palette::Black);
+    data.font(U"HIGHSCORE ", Pad(data.highScore, { 5, U'0' })).draw(Arg::topRight = Vec2(Window::Width(), 0), Palette::Black);
+}
 
 class Title : public App::Scene {
 public:
@@ -360,9 +367,13 @@ public:
     void draw() const override {
         getData().stage.draw();
         getData().player.draw();
-        getData().font(U"SCORE: ", getData().score, U" HIGHSCORE: ", getData().highScore)
-            .draw(Vec2(0, 0), Palette::Black);
-        titleTex.drawAt(Window::Center());
+        drawScore(getData());
+        titleTex.drawAt(Window::Center() - Vec2(0.0, Window::Height() / 8.0));
+
+        int i = 0;
+        for (const auto& line : { U"← → うごく", U"↑ ジャンプ", U"Z たまごをなげる", U"", U"Zをおして はじめる" }) {
+            getData().font(line).drawAt(Window::Center() + Vec2(0.0, i++ * getData().font.height()), Palette::Black);
+        }
     }
 
 private:
@@ -420,8 +431,7 @@ public:
             block.draw();
         }
         getData().player.draw();
-        getData().font(U"SCORE: ", getData().score, U" HIGHSCORE: ", getData().highScore)
-            .draw(Vec2(0, 0), Palette::Black);
+        drawScore(getData());
     }
 
 private:
@@ -447,9 +457,9 @@ public:
             block.draw();
         }
         getData().player.draw();
-        getData().font(U"SCORE: ", getData().score, U" HIGHSCORE: ", getData().highScore)
-            .draw(Vec2(0, 0), Palette::Black);
-        gameOverTex.drawAt(Window::Center());
+        drawScore(getData());
+        gameOverTex.drawAt(Window::Center() - Vec2(0.0, Window::Height() / 8.0));
+        getData().font(U"Rをおして もういちどはじめる").drawAt(Window::Center() + Vec2(0.0, Window::Height() / 8.0), Palette::Black);
     }
 
 private:
