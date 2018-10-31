@@ -91,6 +91,8 @@ private:
 
 class Block {
 public:
+    using HitCallback = std::function<void(double height)>;
+
     static const double fallingSpeed;
     static const double size;
 
@@ -121,6 +123,7 @@ public:
 
     void destroy() {
         destroyed = true;
+        hitCallback(1.0 - rect.y / Window::Height());
     }
 
     bool isDestroyed() const {
@@ -135,12 +138,17 @@ public:
         return touchingTop;
     }
 
+    void setHitCallback(HitCallback callback) {
+        hitCallback = callback;
+    }
+
 private:
     RectF rect;
     bool destroyed = false;
     bool moving = true;
     bool touchingTop = false;
     double speed = 3.0;
+    HitCallback hitCallback;
 
     bool willCollide(const std::vector<Block>& blocks) const {
         if (rect.y + rect.h + speed > Window::Height() - floorHeight) {
@@ -308,10 +316,17 @@ public:
         if (egg) {
             egg->draw();
         }
-        const auto& tex = (!throwingAnim.isStarted() || throwingAnim.isFinished()) ? restingAnim.get() : throwingAnim.get();
-        constexpr double heightInTexels = 315.0;
-        const auto stex = tex.mirrored(facingRight).scaled(rect.h / heightInTexels);
-        stex.drawAt(rect.bottomCenter() - Vec2(0.0, stex.size.y / 2.0));
+        if (dead) {
+            constexpr double armHeightInTexels = 30.0;
+            const auto tex = TextureAsset(U"death");
+            const auto tr = tex.scaled(rect.h / tex.height());
+            tr.drawAt(rect.bottomCenter() - Vec2(0.0, tr.size.y / 2.0 - armHeightInTexels * rect.h / tex.height()));
+        } else {
+            constexpr double heightInTexels = 315.0;
+            const auto& tex = (!throwingAnim.isStarted() || throwingAnim.isFinished()) ? restingAnim.get() : throwingAnim.get();
+            const auto tr = tex.mirrored(facingRight).scaled(rect.h / heightInTexels);
+            tr.drawAt(rect.bottomCenter() - Vec2(0.0, tr.size.y / 2.0));
+        }
     }
 
     bool isDead() const {
@@ -398,6 +413,10 @@ public:
             blocks.emplace_back(
                 Random(0, numBlocksX - 1) * Window::Width() /
                 static_cast<double>(numBlocksX));
+            blocks.back().setHitCallback([this](double height) {
+                getData().score += static_cast<int>(100.0 * height);
+                getData().highScore = std::max(getData().score, getData().highScore);
+            });
             blockFallSW.restart();
         }
         for (auto& block : blocks) {
@@ -414,15 +433,10 @@ public:
             return;
         }
 
-        const auto numBlocks = blocks.size();
         blocks.erase(
             std::remove_if(blocks.begin(), blocks.end(),
                 [](const auto& block) { return block.isDestroyed(); }),
             blocks.end());
-        if (numBlocks > blocks.size()) {
-            getData().score += 10;
-            getData().highScore = std::max(getData().score, getData().highScore);
-        }
     }
 
     void draw() const override {
@@ -475,6 +489,7 @@ void Main() {
     TextureAsset::Register(U"block", U"imgs/block.png");
     TextureAsset::Register(U"boom1", U"imgs/boom1.png");
     TextureAsset::Register(U"boom2", U"imgs/boom2.png");
+    TextureAsset::Register(U"death", U"imgs/death.png");
     TextureAsset::Register(U"gameover", U"imgs/gameover.png");
     TextureAsset::Register(U"stop1", U"imgs/stop1.png");
     TextureAsset::Register(U"stop2", U"imgs/stop2.png");
@@ -483,6 +498,10 @@ void Main() {
     TextureAsset::Register(U"tamago", U"imgs/tamago.png");
     TextureAsset::Register(U"throw1", U"imgs/throw1.png");
     TextureAsset::Register(U"title", U"imgs/title.png");
+
+    AudioAsset::Register(U"bgm", U"tapiocamild.mp3");
+    AudioAsset(U"bgm").setLoop(true);
+    AudioAsset(U"bgm").play();
 
     const auto data = std::make_shared<Data>();
 
