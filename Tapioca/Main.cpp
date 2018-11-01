@@ -142,6 +142,10 @@ public:
         hitCallback = callback;
     }
 
+    double getPosY() const {
+        return rect.y;
+    }
+
 private:
     RectF rect;
     bool destroyed = false;
@@ -227,7 +231,8 @@ const double Egg::size = 50.0;
 
 class Player {
 public:
-    Player() :
+    Player(Optional<detail::Gamepad_impl> gp) :
+        gamepad(gp),
         rect(100, Window::Height() - floorHeight - size.y, size),
         eggLaunchTimer(0.5, false),
         restingAnim({ U"stop1", U"stop2" }, 0.3),
@@ -236,7 +241,12 @@ public:
     }
 
     void update(std::vector<Block>& blocks) {
-        if (KeyZ.down() && eggLaunchTimer.reachedZero()) {
+        const bool keyThrow = KeyZ.pressed() || (gamepad && gamepad->buttons.at(0).pressed());
+        const bool keyLeft = KeyLeft.pressed() || (gamepad && gamepad->povLeft.pressed());
+        const bool keyRight = KeyRight.pressed() || (gamepad && gamepad->povRight.pressed());
+        const bool keyJump = KeyUp.pressed() || (gamepad && gamepad->buttons.at(1).pressed());
+
+        if (keyThrow && eggLaunchTimer.reachedZero()) {
             throwingAnim.start();
             egg = Egg(rect.topCenter(), facingRight);
             eggLaunchTimer.restart();
@@ -248,11 +258,11 @@ public:
             }
         }
 
-        if (KeyLeft.pressed() ^ KeyRight.pressed()) {
-            facingRight = KeyRight.pressed();
+        if (keyLeft ^ keyRight) {
+            facingRight = keyRight;
 
-            const bool left = KeyLeft.pressed() && rect.x > 0.0;
-            const bool right = KeyRight.pressed() && rect.x + rect.w < Window::Width();
+            const bool left = keyLeft && rect.x > 0.0;
+            const bool right = keyRight && rect.x + rect.w < Window::Width();
             if (left ^ right) {
                 double vx = left ? -speed : speed;
                 auto nextRect = rect;
@@ -267,7 +277,7 @@ public:
             }
         }
 
-        if (grounded && KeyUp.down()) {
+        if (grounded && keyJump) {
             constexpr double jumpSpeed = 20.0;
             vy = -jumpSpeed;
             grounded = false;
@@ -301,7 +311,7 @@ public:
 
         if (grounded) {
             for (const auto& block : blocks) {
-                if (block.isMoving() && block.intersects(rect)) {
+                if (block.isMoving() && block.getPosY() < rect.y && block.intersects(rect)) {
                     dead = true;
                     break;
                 }
@@ -336,6 +346,7 @@ public:
 private:
     static const Size size;
     static const double speed;
+    Optional<detail::Gamepad_impl> gamepad;
     double vy = 0.0;
     RectF rect;
     bool grounded = false;
@@ -354,8 +365,9 @@ struct Data {
     Font font = Font(28, U"PixelMplus10-Regular.ttf");
     int score = 0;
     int highScore = 0;
+    Optional<detail::Gamepad_impl> gamepad;
     Stage stage;
-    Player player;
+    Player player = Player(none);
     std::vector<Block> blocks;
 };
 
@@ -374,7 +386,7 @@ public:
     }
 
     void update() override {
-        if (KeyZ.down()) {
+        if (KeyZ.down() || (getData().gamepad.has_value() && getData().gamepad->buttons.at(0).down())) {
             changeScene(Scene::Playing, 0, false);
         }
     }
@@ -386,7 +398,13 @@ public:
         titleTex.drawAt(Window::Center() - Vec2(0.0, Window::Height() / 8.0));
 
         int i = 0;
-        for (const auto& line : { U"← → うごく", U"↑ ジャンプ", U"Z たまごをなげる", U"", U"Zをおして はじめる" }) {
+        std::vector<String> lines;
+        if (getData().gamepad.has_value()) {
+            lines = { U"← → うごく", U"B ジャンプ", U"A たまごをなげる", U"", U"Aをおして はじめる" };
+        } else {
+            lines = { U"← → うごく", U"↑ ジャンプ", U"Z たまごをなげる", U"", U"Zをおして はじめる" };
+        }
+        for (const auto& line : lines) {
             getData().font(line).drawAt(Window::Center() + Vec2(0.0, i++ * getData().font.height()), Palette::Black);
         }
     }
@@ -399,7 +417,7 @@ class Playing : public App::Scene {
 public:
     Playing(const InitData& init) : IScene(init) {
         getData().score = 0;
-        getData().player = Player();
+        getData().player = Player(getData().gamepad);
         getData().blocks = {};
         blockFallSW.start();
     }
@@ -460,7 +478,8 @@ public:
     }
 
     void update() override {
-        if (KeyR.down()) {
+        const auto gp = getData().gamepad;
+        if (KeyR.down() || (gp && gp->buttons.at(0).down())) {
             changeScene(Scene::Playing, 0, false);
         }
     }
@@ -473,7 +492,9 @@ public:
         getData().player.draw();
         drawScore(getData());
         gameOverTex.drawAt(Window::Center() - Vec2(0.0, Window::Height() / 8.0));
-        getData().font(U"Rをおして もういちどはじめる").drawAt(Window::Center() + Vec2(0.0, Window::Height() / 8.0), Palette::Black);
+
+        const auto button = getData().gamepad.has_value() ? U"A" : U"R";
+        getData().font(button, U"をおして もういちどはじめる").drawAt(Window::Center() + Vec2(0.0, Window::Height() / 8.0), Palette::Black);
     }
 
 private:
@@ -511,6 +532,11 @@ void Main() {
         if (!reader.read(data->highScore)) {
             data->highScore = 0;
         }
+    }
+
+    const auto pads = System::EnumerateGamepads();
+    if (!pads.empty()) {
+        data->gamepad = Gamepad(pads.front().index);
     }
 
     App mgr(data);
